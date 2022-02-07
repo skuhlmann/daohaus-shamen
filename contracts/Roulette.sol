@@ -238,126 +238,61 @@ abstract contract Ownable is Context {
     }
 }
 
-contract Yeeter is ReentrancyGuard {
-    event YeetReceived(
-        address indexed contributorAddress,
-        uint256 amount,
-        address moloch,
-        uint256 lootToGive,
-        uint256 lootToPlatform
+contract Roulette is ReentrancyGuard {
+    event TriggerPulled(
+        address indexed triggerMan,
+        address deadMember,
+        uint256 newBulletCount
     );
-    mapping(address => uint256) public deposits;
-    uint256 public maxTarget;
-    uint256 public raiseEndTime;
-    uint256 public raiseStartTime;
-    uint256 public maxUnitsPerAddr;
-    uint256 public pricePerUnit;
-    uint256 public lootPerUnit;
+    uint256 public bullets;
     bool public initialized;
 
-    uint256 public platformFee;
-
-    uint256 public balance;
     IMOLOCH public moloch;
-    IWRAPPER public wrapper;
 
-    YeetSummoner factory;
+    RouletteSummoner factory;
 
     function init(
         address _moloch,
-        address payable _wrapper,
-        uint256 _maxTarget, // max raise target
-        uint256 _raiseEndTime,
-        uint256 _raiseStartTime,
-        uint256 _maxUnits, // per individual
-        uint256 _pricePerUnit
+        uint256 _bullets
     ) public {
         require(!initialized, "already initialized");
         initialized = true;
         moloch = IMOLOCH(_moloch);
-        wrapper = IWRAPPER(_wrapper);
-        maxTarget = _maxTarget;
-        raiseEndTime = _raiseEndTime;
-        raiseStartTime = _raiseStartTime;
-        maxUnitsPerAddr = _maxUnits;
-        pricePerUnit = _pricePerUnit;
+        bullets = _bullets;
 
-        factory = YeetSummoner(msg.sender);
+        factory = RouletteSummoner(msg.sender);
+    }
+
+    function random(address[] members) private view returns (uint) {
+        return uint(keccak256(abi.encodePacked(block.difficulty, block.timestamp, members)));
+    }
+
+    function pickAddress() public {
+        // this memberList doesn't seem to work so might be impossible
+        address[] memberList = moloch.memberList();
+        return random(memberList)%memberList.length;
     }
 
     function initTemplate() public {
         initialized = true;
     }
 
-    function yeetyeet() public payable nonReentrant {
+    function pullTrigger() public nonReentrant {
         require(address(moloch) != address(0), "!init");
-        require(msg.value >= pricePerUnit, "< minimum");
-        require(balance < maxTarget, "Max Target reached"); // balance plus newvalue
-        require(block.timestamp < raiseEndTime, "Time is up");
-        require(block.timestamp > raiseStartTime, "Not Started");
-        require(moloch.shamans(address(this)), "Shaman not whitelisted");
-        require(
-            moloch.tokenWhitelist(address(wrapper)),
-            "Wrapper not whitelisted"
-        );
-        uint256 numUnits = msg.value / pricePerUnit; // floor units
-        uint256 newValue = numUnits * pricePerUnit;
+        require(bullets > 0, "no bullets");
 
-        // if some one yeets over max should we give them the max and return leftover.
-        require(
-            deposits[msg.sender] + newValue <= maxUnitsPerAddr * pricePerUnit,
-            "Can not deposit more than max"
-        );
+        // do this after setSingleSharesLoot?
+        uint256 newBulletCount = bullets - 1;
 
-        // wrap
-        (bool success, ) = address(wrapper).call{value: newValue}("");
-        require(success, "Wrap failed");
-        // send to dao
-        require(wrapper.transfer(address(moloch), newValue), "Transfer failed");
+        address memberAddress = pickAddress();
 
-        if (msg.value > newValue) {
-            // Return the extra money to the minter.
-            (bool success2, ) = msg.sender.call{value: msg.value - newValue}(
-                ""
-            );
-            require(success2, "Transfer failed");
-        }
-        // TODO: check
-        deposits[msg.sender] = deposits[msg.sender] + newValue;
+        moloch.setSingleSharesLoot(memberAddress, 0, 0, true);
 
-        balance = balance + newValue;
-
-        uint256 lootToGive = (numUnits * factory.lootPerUnit());
-        uint256 lootToPlatform = (numUnits * factory.platformFee());
-
-        moloch.setSingleSharesLoot(msg.sender, 0, lootToGive, true);
-        if (lootToPlatform > 0) {
-            moloch.setSingleSharesLoot(
-                factory.owner(),
-                0,
-                lootToPlatform,
-                true
-            );
-        }
-
-        moloch.collectTokens(address(wrapper));
-
-        // amount of loot? fees?
-        emit YeetReceived(
+        emit TriggerPulled(
             msg.sender,
-            newValue,
-            address(moloch),
-            lootToGive,
-            lootToPlatform
+            memberAddress,
+            newBulletCount
         );
-    }
-
-    receive() external payable {
-        yeetyeet();
-    }
-
-    function goalReached() public view returns (bool) {
-        return balance >= maxTarget;
     }
 }
 
@@ -381,81 +316,46 @@ contract CloneFactory {
     }
 }
 
-contract YeetSummoner is CloneFactory, Ownable {
+contract RouletteSummoner is CloneFactory, Ownable {
     address payable public template;
-    mapping(uint256 => address) public yeeters;
-    uint256 public yeetIdx = 0;
+    mapping(uint256 => address) public roulettes;
+    uint256 public rouletteIdx = 0;
 
-    uint256 public platformFee = 3; // fee of 3.09%
-    uint256 public lootPerUnit = 100;
-
-    event PlatformFeeUpdate(uint256 platformFee, uint256 lootPerUnit);
-
-    event SummonYeetComplete(
+    event SummonRouletteComplete(
         address indexed moloch,
-        address yeeter,
-        address wrapper,
-        uint256 maxTarget,
-        uint256 raiseEndTime,
-        uint256 raiseStartTime,
-        uint256 maxUnits,
-        uint256 pricePerUnit,
+        address roulette,
+        uint256 bullets,
         string details
     );
 
     constructor(address payable _template) {
         template = _template;
-        Yeeter _yeeter = Yeeter(_template);
-        _yeeter.initTemplate();
+        Roulette _roulette = Roulette(_template);
+        _roulette.initTemplate();
     }
 
-    function summonYeet(
+    function summonRoulette(
         address _moloch,
-        address payable _wrapper,
-        uint256 _maxTarget,
-        uint256 _raiseEndTime,
-        uint256 _raiseStartTime,
-        uint256 _maxUnits,
-        uint256 _pricePerUnit,
+        uint256 _bullets,
         string calldata _details
     ) public returns (address) {
-        Yeeter yeeter = Yeeter(payable(createClone(template)));
+        Roulette roulette = Roulette(payable(createClone(template)));
 
-        yeeter.init(
+        roulette.init(
             _moloch,
-            _wrapper,
-            _maxTarget,
-            _raiseEndTime,
-            _raiseStartTime,
-            _maxUnits,
-            _pricePerUnit
+            _bullets,
         );
-        yeetIdx = yeetIdx + 1;
-        yeeters[yeetIdx] = address(yeeter);
+        rouletteIdx = rouletteIdx + 1;
+        roulettes[rouletteIdx] = address(roulette);
 
-        emit SummonYeetComplete(
+        emit SummonRouletteComplete(
             _moloch,
-            address(yeeter),
-            _wrapper,
-            _maxTarget,
-            _raiseEndTime,
-            _raiseStartTime,
-            _maxUnits,
-            _pricePerUnit,
+            address(roulette),
+            _bullets,
             _details
         );
 
-        return address(yeeter);
+        return address(roulette);
     }
 
-    // owner only functions
-    function setConfig(uint256 _platformFee, uint256 _lootPerUnit)
-        public
-        onlyOwner
-    {
-        require(_lootPerUnit > 0, "Can not be 0");
-        platformFee = _platformFee;
-        lootPerUnit = _lootPerUnit;
-        emit PlatformFeeUpdate(platformFee, lootPerUnit);
-    }
 }
