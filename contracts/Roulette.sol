@@ -269,6 +269,7 @@ contract Roulette is ReentrancyGuard {
 
     function pickAddress() public {
         // this memberList doesn't seem to work so might be impossible
+        // if possible this might also need to check that the selected member address has shares or loot
         address[] memberList = moloch.memberList();
         return random(memberList)%memberList.length;
     }
